@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wacrm — Backend Architecture Deep Dive</title>
+<style>
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1512; --surface: #151f1a; --surface-2: #1b2721; --surface-3: #223028;
+      --text: #e7ece8; --text-muted: #9baaa2; --border: #2a3730; --border-soft: #202b25;
+      --accent: #58c2cc; --accent-strong: #7dd4dc; --accent-soft: #163338; --accent-text: #0e1512;
+      --good: #4caf7d; --good-soft: #14241c; --warn: #d8a559; --warn-soft: #2b2416; --danger: #e0776a; --danger-soft: #2c1a17;
+      --code-bg: #1b2721; --shadow: rgba(0,0,0,0.4);
+    }
+  }
+  :root {
+    --bg: #f6f7f5; --surface: #ffffff; --surface-2: #eef1ee; --surface-3: #e3e8e3;
+    --text: #16211c; --text-muted: #4b5952; --border: #d9dfda; --border-soft: #e6eae6;
+    --accent: #1f6e7a; --accent-strong: #175560; --accent-soft: #e4f1f1; --accent-text: #ffffff;
+    --good: #2f8f5b; --good-soft: #e6f3ec; --warn: #a5701f; --warn-soft: #fbf0dd; --danger: #b14a3f; --danger-soft: #fbeae8;
+    --code-bg: #eef1ee; --shadow: rgba(20,30,25,0.08);
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+    --sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1512; --surface: #151f1a; --surface-2: #1b2721; --surface-3: #223028;
+    --text: #e7ece8; --text-muted: #9baaa2; --border: #2a3730; --border-soft: #202b25;
+    --accent: #58c2cc; --accent-strong: #7dd4dc; --accent-soft: #163338; --accent-text: #0e1512;
+    --good: #4caf7d; --good-soft: #14241c; --warn: #d8a559; --warn-soft: #2b2416; --danger: #e0776a; --danger-soft: #2c1a17;
+    --code-bg: #1b2721; --shadow: rgba(0,0,0,0.4);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+    font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent-strong); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  h1, h2, h3, h4 { font-family: var(--serif); font-weight: 700; text-wrap: balance; color: var(--text); }
+  h1 { font-size: 2.5rem; margin: 0 0 .3rem; letter-spacing: -0.01em; }
+  h2 { font-size: 1.65rem; margin: 0 0 .9rem; padding-top: .2rem; }
+  h3 { font-size: 1.2rem; margin: 1.6rem 0 .6rem; color: var(--accent-strong); }
+  h4 { font-size: 1rem; margin: 1.2rem 0 .4rem; font-family: var(--sans); font-weight: 700; }
+  p { margin: 0 0 .9rem; max-width: 74ch; }
+  .lede { color: var(--text-muted); max-width: 68ch; }
+
+  code, .path {
+    font-family: var(--mono); font-size: .86em; background: var(--code-bg);
+    border: 1px solid var(--border-soft); border-radius: 4px; padding: .05em .35em;
+    white-space: nowrap;
+  }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: .9rem 1rem; overflow-x: auto; }
+  pre code { background: none; border: none; padding: 0; white-space: pre; }
+
+  /* Layout shell */
+  .shell { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: 0; max-width: 1320px; margin: 0 auto; }
+  nav.toc {
+    position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+    padding: 1.6rem 1.1rem 2rem; border-right: 1px solid var(--border-soft);
+  }
+  nav.toc .tocbrand { font-family: var(--serif); font-weight: 700; font-size: 1.05rem; margin-bottom: 1.1rem; display: block; }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; counter-reset: sec; }
+  nav.toc li { counter-increment: sec; margin: 0; }
+  nav.toc a {
+    display: block; color: var(--text-muted); font-size: .87rem; padding: .38rem .5rem .38rem .1rem;
+    border-radius: 6px; line-height: 1.3;
+  }
+  nav.toc a::before { content: counter(sec) "  "; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; }
+  nav.toc a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+  nav.toc .tocfoot { margin-top: 1.4rem; padding-top: 1rem; border-top: 1px solid var(--border-soft); font-size: .78rem; color: var(--text-muted); }
+
+  main { padding: 0 0 5rem; min-width: 0; }
+
+  .masthead {
+    padding: 3.2rem clamp(1.2rem, 4vw, 3.4rem) 2.2rem; border-bottom: 1px solid var(--border-soft);
+    background: linear-gradient(180deg, var(--surface-2), var(--bg) 85%);
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: .74rem; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--accent-strong); margin: 0 0 .7rem;
+  }
+  .factstrip { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.3rem; }
+  .fact {
+    font-family: var(--mono); font-size: .78rem; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px; padding: .3rem .75rem; color: var(--text-muted);
+  }
+  .fact b { color: var(--text); font-weight: 600; }
+
+  section { padding: 2.6rem clamp(1.2rem, 4vw, 3.4rem); border-bottom: 1px solid var(--border-soft); max-width: 980px; }
+  section:last-of-type { border-bottom: none; }
+
+  .callout {
+    background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+    border-radius: 8px; padding: 1.1rem 1.3rem; margin: 1.2rem 0; box-shadow: 0 1px 3px var(--shadow);
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout h4 { margin-top: 0; }
+
+  figure { margin: 1.4rem 0 1.8rem; padding: 0; }
+  figure .diagram-frame {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.2rem; overflow-x: auto; box-shadow: 0 1px 4px var(--shadow);
+  }
+  figcaption { font-size: .85rem; color: var(--text-muted); margin-top: .55rem; max-width: 74ch; }
+  figcaption b { color: var(--text); }
+  pre.mermaid { background: transparent; border: none; padding: 0; margin: 0; }
+
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0 1.4rem; font-size: .89rem; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .tablewrap table { margin: 0; }
+  th, td { text-align: left; padding: .55rem .75rem; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  thead th { background: var(--surface-2); font-family: var(--sans); font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); font-weight: 700; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--surface-2); }
+
+  .chip { display: inline-flex; align-items: center; gap: .3rem; font-size: .72rem; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; padding: .18rem .55rem; border-radius: 999px; }
+  .chip.good { background: var(--good-soft); color: var(--good); }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); }
+  .chip.danger { background: var(--danger-soft); color: var(--danger); }
+  .chip.info { background: var(--accent-soft); color: var(--accent-strong); }
+
+  .risk-list { display: flex; flex-direction: column; gap: .8rem; margin: 1.2rem 0; }
+  .risk {
+    display: grid; grid-template-columns: 120px 1fr; gap: 1rem; align-items: start;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: .9rem 1.1rem;
+  }
+  .risk .risklabel { display: flex; flex-direction: column; gap: .35rem; align-items: flex-start; }
+  .risk h4 { margin: 0 0 .3rem; }
+  .risk p { margin: 0 0 .35rem; font-size: .93rem; }
+  .risk .fix { font-size: .84rem; color: var(--text-muted); }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+  @media (max-width: 720px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+
+  .mm-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.1rem; }
+  .mm-card h4 { margin-top: 0; color: var(--accent-strong); font-family: var(--sans); }
+  .mm-card p { font-size: .92rem; margin-bottom: 0; }
+
+  ol.workflow-list { padding-left: 0; list-style: none; counter-reset: wf; display: flex; flex-direction: column; gap: 1rem; margin: 1.2rem 0; }
+  ol.workflow-list li { counter-increment: wf; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: .9rem 1.1rem 1rem 3.2rem; position: relative; }
+  ol.workflow-list li::before {
+    content: counter(wf); position: absolute; left: .8rem; top: .85rem; font-family: var(--serif); font-weight: 700;
+    font-size: 1.2rem; color: var(--accent); width: 1.6rem; height: 1.6rem; display: flex; align-items: center; justify-content: center;
+    border: 1.5px solid var(--accent); border-radius: 50%;
+  }
+  ol.workflow-list b { display: block; margin-bottom: .2rem; }
+  ol.workflow-list .wpaths { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem; }
+
+  .backtop { position: fixed; right: 1.4rem; bottom: 1.4rem; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: .5rem .9rem; font-size: .78rem; color: var(--text-muted); box-shadow: 0 2px 8px var(--shadow); }
+  .backtop:hover { color: var(--text); text-decoration: none; }
+
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+    nav.toc { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border-soft); }
+  }
+
+  @media print {
+    nav.toc, .backtop { display: none !important; }
+    .shell { grid-template-columns: 1fr; }
+    section { break-inside: avoid-page; border-bottom: none; }
+    body { background: #fff; color: #111; }
+    a { color: #111; text-decoration: underline; }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <nav class="toc" aria-label="Table of contents">
+    <span class="tocbrand">wacrm — Architecture Map</span>
+    <ol>
+      <li><a href="#mental-model">Mental model</a></li>
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#data-model">Data model &amp; tenancy</a></li>
+      <li><a href="#auth">Authentication &amp; permissions</a></li>
+      <li><a href="#api-flows">API flow traces</a></li>
+      <li><a href="#workflows">End-to-end workflows</a></li>
+      <li><a href="#background">Background processing</a></li>
+      <li><a href="#integrations">External integrations</a></li>
+      <li><a href="#states">State transitions</a></li>
+      <li><a href="#risks">Architecture risks</a></li>
+      <li><a href="#start-here">Where to start reading</a></li>
+    </ol>
+    <div class="tocfoot">Read-only analysis, verified line-by-line against the working copy. No files were modified.</div>
+  </nav>
+
+  <main>
+    <div class="masthead">
+      <p class="eyebrow">Backend architecture deep dive · verified against source</p>
+      <h1>wacrm</h1>
+      <p class="lede">A self-hosted CRM for the WhatsApp Business Cloud API, built as a single Next.js 16 deployable over Supabase. No separate backend service, no ORM, no job queue — every mechanism described below was traced to a specific file and line in this working copy (package.json version 0.8.0).</p>
+      <div class="factstrip">
+        <span class="fact"><b>Framework</b> Next.js 16 App Router, React 19</span>
+        <span class="fact"><b>Database</b> Supabase Postgres, RLS on every table</span>
+        <span class="fact"><b>Migrations</b> 36 hand-written SQL files, no ORM</span>
+        <span class="fact"><b>Tenancy</b> accounts + 4-tier RBAC</span>
+        <span class="fact"><b>Automation engines</b> Automations (flat) + Flows (graph)</span>
+        <span class="fact"><b>Background work</b> <code>after()</code> + externally-pinged cron, no queue</span>
+      </div>
+    </div>
+
+    <!-- ============ MENTAL MODEL ============ -->
+    <section id="mental-model">
+      <h2>Simple developer mental model</h2>
+      <p class="lede">Before the detail: five sentences that explain almost everything else in this document.</p>
+      <div class="grid2">
+        <div class="mm-card">
+          <h4>1. It's one app, not a distributed system</h4>
+          <p>Every "service" is a folder under <code>src/lib/</code>. Route handlers under <code>src/app/api/</code> are thin adapters: parse request → call a <code>src/lib/</code> function → return JSON. There is no separate API server, no microservice boundary, no message broker.</p>
+        </div>
+        <div class="mm-card">
+          <h4>2. Postgres RLS is the real authorization boundary</h4>
+          <p>Row-Level Security policies (keyed on <code>account_id</code> via the <code>is_account_member()</code> SQL helper) are checked on every table, every query, from the RLS-respecting client. App-layer role checks in <code>src/lib/auth/roles.ts</code> exist for UI gating and API guards, but the database enforces tenancy independently.</p>
+        </div>
+        <div class="mm-card">
+          <h4>3. One inbound webhook feeds three "brains"</h4>
+          <p>Every customer WhatsApp message lands at one route handler, which sequentially offers it to the <b>Flows</b> engine, then the <b>Automations</b> engine, then the <b>AI auto-reply</b> — each one aware of whether an earlier one already "consumed" the message.</p>
+        </div>
+        <div class="mm-card">
+          <h4>4. Service-role code paths police themselves</h4>
+          <p>The webhook, both automation engines, and the public API's key-auth path all use a service-role Postgres client that <b>bypasses RLS</b>. Each of those code paths is individually responsible for re-checking that a row actually belongs to the claimed <code>account_id</code> — the database won't stop a mistake there.</p>
+        </div>
+        <div class="mm-card">
+          <h4>5. Nothing runs unless something pings it</h4>
+          <p>There's no worker process and no job queue. "Wait" steps and stale-run cleanup are rows in a table with a <code>run_at</code> timestamp, drained only when an external cron pings <code>GET /api/automations/cron</code> / <code>GET /api/flows/cron</code>. Skip that ping and those features simply stall.</p>
+        </div>
+        <div class="mm-card">
+          <h4>Read next</h4>
+          <p>Jump to <a href="#start-here">§10 — Where to start reading</a> for the ten files that will teach you 80% of this codebase, or keep scrolling for the full trace.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ ARCHITECTURE ============ -->
+    <section id="architecture">
+      <h2>1 · Architecture</h2>
+      <p>wacrm is a single Next.js <code>output: "standalone"</code> deployable. There is no ORM (raw <code>@supabase/supabase-js</code> calls + 36 hand-written SQL migrations) and no background worker — async work is either Next's <code>after()</code> callback inside a request, or an externally-pinged cron <code>GET</code> endpoint.</p>
+
+      <figure>
+        <div class="diagram-frame">
+<pre class="mermaid">
+flowchart LR
+  subgraph Client["Clients"]
+    Dash["Dashboard UI\n(React 19 Server + Client Components)"]
+    ThirdParty["Third-party integrations"]
+    MCP["MCP Server (wacrm-mcp)\nmcp-server/"]
+  end
+  subgraph App["Next.js 16 App — single deployable"]
+    MW["middleware.ts\nsession refresh + route guard"]
+    Pages["Server Components\nsrc/app/(dashboard)"]
+    API["Route Handlers\nsrc/app/api/*"]
+    V1["Public REST API\nsrc/app/api/v1/*"]
+    Lib["Domain logic\nsrc/lib/*"]
+  end
+  subgraph Data["Supabase project"]
+    PG[("Postgres\nRLS on every table")]
+    Auth["Supabase Auth"]
+    Storage["Storage buckets"]
+    RT["Realtime"]
+  end
+  subgraph Ext["External services"]
+    Meta["Meta Graph API\ngraph.facebook.com"]
+    AIP["OpenAI / Anthropic\nbring-your-own key"]
+    Hooks["Subscriber webhooks\nthird-party endpoints"]
+  end
+
+  Dash -->|"cookies / JWT"| MW --> Pages
+  Dash -->|"fetch"| API
+  ThirdParty -->|"Bearer wacrm_live_..."| V1
+  MCP -->|"Bearer wacrm_live_..."| V1
+  API --> Lib
+  V1 --> Lib
+  Pages --> Lib
+  Lib -->|"RLS client or service-role client"| PG
+  MW --> Auth
+  Lib --> Storage
+  PG -.->|"publication"| RT -.->|"subscribe"| Dash
+  Lib -->|"server-side only, never client-exposed"| Meta
+  Lib -->|"per-account key"| AIP
+  Lib -->|"HMAC-signed, best-effort"| Hooks
+  Meta -->|"webhook POST, HMAC verified"| API
+</pre>
+        </div>
+        <figcaption><b>Figure 1.</b> System context. Everything server-side lives inside one Next.js process; Supabase is the only stateful dependency. Meta's Graph API is only ever called from the server — the CSP's <code>connect-src</code> deliberately excludes <code>graph.facebook.com</code> so a compromised client script can't reach it directly.</figcaption>
+      </figure>
+
+      <h3>Layers</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Layer</th><th>Where</th><th>Responsibility</th></tr></thead>
+          <tbody>
+            <tr><td>Presentation</td><td><code>src/app/(auth)</code>, <code>src/app/(dashboard)</code>, <code>src/components</code></td><td>Server + Client Components, shadcn/ui, Tailwind v4</td></tr>
+            <tr><td>Internal API</td><td><code>src/app/api/**</code> (excluding <code>v1</code>)</td><td>Cookie-authenticated route handlers used by the dashboard itself</td></tr>
+            <tr><td>Public API</td><td><code>src/app/api/v1/**</code></td><td>API-key-authenticated REST surface for external integrations and the MCP server</td></tr>
+            <tr><td>Domain logic</td><td><code>src/lib/{account,ai,api,api-keys,auth,automations,broadcast-status,contacts,conversations,currency,dashboard,flows,inbox,media,presence,rate-limit,storage,supabase,template-status,themes,utils,webhooks,whatsapp}</code></td><td>All business rules, one bounded context per subfolder, most with a colocated <code>*.test.ts</code></td></tr>
+            <tr><td>Data</td><td>Supabase project (external)</td><td>Postgres + RLS, Auth, Storage, Realtime, pgvector</td></tr>
+            <tr><td>External</td><td>N/A</td><td>Meta Graph API, OpenAI/Anthropic (BYO key), subscriber webhook endpoints</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><i>Notably absent:</i> no ORM/query builder, no separate backend service, no job queue or worker process, no first-party distributed cache. These are deliberate simplicity choices for a self-hosted, fork-and-deploy template — see <a href="#risks">§9</a> for where that tradeoff shows up under scale.</p>
+    </section>
+
+    <!-- ============ DATA MODEL ============ -->
+    <section id="data-model">
+      <h2>2 · Data model &amp; multi-tenancy</h2>
+      <p>Schema of record is <code>supabase/migrations/*.sql</code> — 36 sequential, idempotent, hand-written files, applied manually via the Supabase CLI (no migration runner is wired into the build). The tenancy model was retrofitted in <code>017_account_sharing.sql</code>: every domain table gained an <code>account_id</code> column, and RLS policies now check account membership rather than raw row ownership.</p>
+
+      <figure>
+        <div class="diagram-frame">
+<pre class="mermaid">
+erDiagram
+  ACCOUNTS ||--o{ PROFILES : "members (account_role)"
+  ACCOUNTS ||--o{ ACCOUNT_INVITATIONS : "invites (token hashed)"
+  ACCOUNTS ||--o{ CONTACTS : "owns"
+  ACCOUNTS ||--o{ CONVERSATIONS : "owns"
+  ACCOUNTS ||--|| WHATSAPP_CONFIG : "1:1, unique phone_number_id"
+  ACCOUNTS ||--o{ AUTOMATIONS : "owns"
+  ACCOUNTS ||--o{ FLOWS : "owns"
+  ACCOUNTS ||--o{ API_KEYS : "owns"
+  ACCOUNTS ||--|| AI_CONFIGS : "1:1, BYO key"
+  CONTACTS ||--|| CONVERSATIONS : "1:1 per account (migration 036)"
+  CONVERSATIONS ||--o{ MESSAGES : "contains"
+  MESSAGES ||--o{ MESSAGE_REACTIONS : "reactions"
+  CONTACTS ||--o{ DEALS : "linked, ON DELETE SET NULL"
+  PIPELINES ||--o{ PIPELINE_STAGES : "has"
+  PIPELINE_STAGES ||--o{ DEALS : "contains"
+  AUTOMATIONS ||--o{ AUTOMATION_STEPS : "step tree"
+  AUTOMATIONS ||--o{ AUTOMATION_LOGS : "run history"
+  FLOWS ||--o{ FLOW_NODES : "graph, edges embedded in config JSONB"
+  FLOWS ||--o{ FLOW_RUNS : "runs, 1 active per contact"
+  FLOW_RUNS ||--o{ FLOW_RUN_EVENTS : "append-only audit"
+  AI_CONFIGS ||--o{ AI_USAGE_LOG : "meters tokens"
+</pre>
+        </div>
+        <figcaption><b>Figure 2.</b> Core entity relationships, tenancy-centric. Every box connects back to <code>accounts</code> via <code>account_id</code> (mostly <code>ON DELETE CASCADE</code>); customer-facing history uses <code>ON DELETE SET NULL</code> instead, deliberately, so deleting a contact or reassigning a deal never destroys a message thread or invalidates an aggregate counter (<code>004_contact_delete_set_null.sql</code>).</figcaption>
+      </figure>
+
+      <h3>The tenancy primitive: <code>is_account_member()</code></h3>
+      <p>A single <code>SECURITY DEFINER</code> SQL function is the predicate behind essentially every RLS policy in the schema, and its role-ranking logic is deliberately mirrored — not re-derived — in TypeScript:</p>
+      <div class="grid2">
+        <div>
+          <p><code>supabase/migrations/017_account_sharing.sql</code></p>
+<pre><code>CREATE FUNCTION is_account_member(
+  target_account_id UUID,
+  min_role account_role_enum DEFAULT 'viewer'
+) RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM profiles p
+    WHERE p.user_id = auth.uid()
+      AND p.account_id = target_account_id
+      AND CASE p.account_role
+            WHEN 'owner' THEN 4 WHEN 'admin' THEN 3
+            WHEN 'agent' THEN 2 WHEN 'viewer' THEN 1 END
+        &gt;=
+          CASE min_role
+            WHEN 'owner' THEN 4 WHEN 'admin' THEN 3
+            WHEN 'agent' THEN 2 WHEN 'viewer' THEN 1 END
+  );
+$$;</code></pre>
+        </div>
+        <div>
+          <p><code>src/lib/auth/roles.ts</code></p>
+<pre><code>const ACCOUNT_ROLES = ["viewer","agent","admin","owner"];
+
+function roleRank(role) {
+  return ACCOUNT_ROLES.indexOf(role) + 1; // 1..4
+}
+function hasMinRole(role, min) {
+  return roleRank(role) &gt;= roleRank(min);
+}
+
+canManageMembers = (r) =&gt; hasMinRole(r, "admin");
+canEditSettings  = (r) =&gt; hasMinRole(r, "admin");
+canSendMessages  = (r) =&gt; hasMinRole(r, "agent");
+canDeleteAccount     = (r) =&gt; r === "owner";
+canTransferOwnership = (r) =&gt; r === "owner";</code></pre>
+        </div>
+      </div>
+      <p>Example policy built on it, <code>contacts</code> (<code>017_account_sharing.sql</code>): any member can <code>SELECT</code>, but <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> require <code>is_account_member(account_id, 'agent')</code> — matching <code>canSendMessages</code>'s agent-floor exactly. Settings-class tables (<code>whatsapp_config</code>, <code>api_keys</code>, <code>webhook_endpoints</code>, <code>ai_configs</code>) instead gate writes at <code>'admin'</code>, matching <code>canEditSettings</code>.</p>
+
+      <h3>Role capability matrix</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Capability</th><th>Viewer</th><th>Agent</th><th>Admin</th><th>Owner</th><th>Predicate</th></tr></thead>
+          <tbody>
+            <tr><td>Read inbox / contacts / pipelines</td><td><span class="chip good">Yes</span></td><td><span class="chip good">Yes</span></td><td><span class="chip good">Yes</span></td><td><span class="chip good">Yes</span></td><td><code>is_account_member(id)</code></td></tr>
+            <tr><td>Send messages, edit contacts/deals</td><td>—</td><td><span class="chip good">Yes</span></td><td><span class="chip good">Yes</span></td><td><span class="chip good">Yes</span></td><td><code>canSendMessages</code></td></tr>
+            <tr><td>Manage members, invitations</td><td>—</td><td>—</td><td><span class="chip good">Yes</span></td><td><span class="chip good">Yes</span></td><td><code>canManageMembers</code></td></tr>
+            <tr><td>Edit WhatsApp/AI/webhook settings, API keys</td><td>—</td><td>—</td><td><span class="chip good">Yes</span></td><td><span class="chip good">Yes</span></td><td><code>canEditSettings</code></td></tr>
+            <tr><td>Transfer ownership / delete account</td><td>—</td><td>—</td><td>—</td><td><span class="chip good">Yes</span></td><td><code>canTransferOwnership</code> / <code>canDeleteAccount</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Notable schema details</h3>
+      <ul>
+        <li><b>Contact/conversation dedup is enforced, not just conventional.</b> <code>contacts.phone_normalized</code> is a generated column with a unique partial index per account (<code>022_contact_phone_dedup.sql</code>); <code>conversations</code> got a matching unique <code>(account_id, contact_id)</code> index in <code>036_conversation_contact_dedup.sql</code>, each preceded by a <code>merge_duplicate_contacts()</code> / <code>merge_duplicate_conversations()</code> one-time cleanup function that re-points every dependent row before the constraint goes live.</li>
+        <li><b>Realtime</b> is enabled on <code>messages</code>, <code>conversations</code>, <code>flow_runs</code>, <code>notifications</code>, and <code>member_presence</code> — the inbox UI subscribes rather than polls (<code>src/hooks/use-realtime.ts</code>).</li>
+        <li><b>Two real security-fix migrations exist in this history</b> and are worth reading before adding any new <code>SECURITY DEFINER</code> function: <code>032_fix_ai_knowledge_membership.sql</code> downgrades the knowledge-base search RPCs from <code>DEFINER</code> to <code>INVOKER</code> (closing a cross-account RAG read), and <code>034_fix_profiles_update_rls.sql</code> adds a trigger blocking a client from writing its own <code>account_id</code>/<code>account_role</code> (closing a tenant-hop/privilege-escalation hole). Both are tagged <code>GHSA-fg5p-2qc3-jmxr</code> in the SQL comments.</li>
+        <li><b>One schema inconsistency:</b> <code>message_templates</code> gained an <code>account_id</code> column in migration 017 but its uniqueness constraint (<code>014_message_templates_meta_integration.sql</code>) is still <code>UNIQUE(user_id, name, language)</code>, not account-scoped — two different agents in the same account could create same-named templates, unlike every other account-scoped unique index in the schema.</li>
+      </ul>
+    </section>
+
+    <!-- ============ AUTH ============ -->
+    <section id="auth">
+      <h2>3 · Authentication &amp; permissions</h2>
+      <p>There are <b>two independent auth systems</b> in this codebase, and they don't share a code path: cookie/JWT session auth for the dashboard, and API-key auth for the public REST API. A third, informal mechanism — HMAC signature verification — authenticates inbound Meta webhooks (covered in <a href="#workflows">§6</a>).</p>
+
+      <h3>3.1 Dashboard session auth</h3>
+      <figure>
+        <div class="diagram-frame">
+<pre class="mermaid">
+sequenceDiagram
+  participant B as Browser
+  participant M as "src/middleware.ts"
+  participant SB as Supabase Auth
+  participant R as Route or Server Component
+
+  B-&gt;&gt;M: Request + session cookies
+  M-&gt;&gt;SB: supabase.auth.getUser()
+  alt access token expired
+    SB--&gt;&gt;M: refreshed session, rotated Set-Cookie
+  else still valid
+    SB--&gt;&gt;M: user
+  end
+  Note over M: withRefreshedCookies() copies the\nrotated cookies onto WHATEVER response\nis returned below (fixes issue #288)
+  alt protected path, no user
+    M--&gt;&gt;B: 302 to /login (rotated cookies attached)
+  else auth page, user present
+    M--&gt;&gt;B: 302 to /dashboard or /join/:token
+  else unauthenticated /api/whatsapp/* (not webhook)
+    M--&gt;&gt;B: 401 JSON (rotated cookies attached)
+  else allowed
+    M-&gt;&gt;R: forward request
+    R--&gt;&gt;B: response (rotated cookies attached)
+  end
+</pre>
+        </div>
+        <figcaption><b>Figure 3.</b> <code>src/middleware.ts</code> runs on nearly every request. The load-bearing detail is <code>withRefreshedCookies()</code>: because <code>supabase.auth.getUser()</code> transparently rotates the refresh token, any code path that builds a fresh <code>NextResponse</code> without copying those cookies over would silently wedge the session after an idle period. Protected paths: <code>/dashboard</code>, <code>/inbox</code>, <code>/contacts</code>, <code>/pipelines</code>, <code>/broadcasts</code>, <code>/automations</code>, <code>/settings</code>. The webhook route is exempted from the 401 gate via a runtime <code>pathname.includes('/webhook')</code> check, not a matcher exclusion.</figcaption>
+      </figure>
+
+      <h3>3.2 Public API key auth (<code>/api/v1/*</code>)</h3>
+      <figure>
+        <div class="diagram-frame">
+<pre class="mermaid">
+sequenceDiagram
+  participant C as "Caller (3rd-party app / MCP server)"
+  participant V1 as "/api/v1/* route"
+  participant AC as "requireApiKey()\nsrc/lib/auth/api-context.ts"
+  participant DB as "Postgres (service-role client)"
+
+  C-&gt;&gt;V1: Authorization Bearer wacrm_live_...
+  V1-&gt;&gt;AC: requireApiKey(request, scope)
+  AC-&gt;&gt;AC: hashApiKey() — SHA-256
+  AC-&gt;&gt;DB: lookup api_keys by key_hash
+  DB--&gt;&gt;AC: row, or none
+  AC-&gt;&gt;AC: reject if revoked_at or expires_at passed
+  AC-&gt;&gt;AC: checkRateLimit("apikey:id", 120 per min)
+  AC-&gt;&gt;AC: hasScope(row.scopes, required scope)
+  AC--&gt;&gt;V1: accountId, scopes, admin Postgres client
+  V1-&gt;&gt;DB: query manually scoped to accountId
+  DB--&gt;&gt;V1: rows
+  V1--&gt;&gt;C: JSON { data, meta }
+</pre>
+        </div>
+        <figcaption><b>Figure 4.</b> Keys are prefixed <code>wacrm_live_</code>, stored as a SHA-256 hash only (plaintext shown once at creation), scoped to one of <code>messages:send</code>, <code>messages:read</code>, <code>contacts:read</code>, <code>contacts:write</code>, <code>conversations:read</code>, <code>broadcasts:send</code>, <code>webhooks:manage</code>, and rate-limited per key. The rate-limit check runs <i>before</i> the scope check specifically so a caller with a valid-but-wrong-scope key still can't hammer the endpoint for free. Only admins/owners can mint keys. The MCP server (<code>mcp-server/</code>) is a thin wrapper over this exact surface — it never talks to Supabase or Meta directly, so it inherits every one of these guarantees rather than re-implementing them.</figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>Where the service-role (RLS-bypassing) client actually lives</h4>
+        <p>Four privileged code paths need a Postgres client that isn't scoped to a logged-in user's cookies: the WhatsApp webhook, the Automations engine, the Flows engine, and the AI engine (the public API's key-auth path reuses one of these). Verification against the source found this is implemented as <b>three near-identical, independently-defined <code>supabaseAdmin()</code> factories</b> — <code>src/lib/flows/admin-client.ts</code>, <code>src/lib/automations/admin-client.ts</code>, <code>src/lib/ai/admin-client.ts</code> — plus a fourth inline copy in <code>src/app/api/whatsapp/webhook/route.ts</code>, all independently instantiating a client from <code>SUPABASE_SERVICE_ROLE_KEY</code>. The public API's key-auth path (<code>src/lib/api-keys/store.ts</code>, <code>src/lib/auth/api-context.ts</code>) imports the <i>flows</i> copy rather than a dedicated one. Functionally equivalent, but it means "does this call the service-role client and does it re-check tenancy" has to be verified in four places, not one — see <a href="#risks">§9</a>.</p>
+      </div>
+    </section>
+
+    <!-- ============ API FLOWS ============ -->
+    <section id="api-flows">
+      <h2>4 · API flow traces</h2>
+      <p>Two representative endpoint traces — one public-API write, one AI read — showing the full request → validation → business logic → database → external service → response path.</p>
+
+      <h3>Trace A — <code>POST /api/v1/messages</code> (send a message via the public API)</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Step</th><th>What happens</th><th>Where</th></tr></thead>
+          <tbody>
+            <tr><td>1. Auth</td><td><code>requireApiKey(request, 'messages:send')</code> — hash lookup, revoked/expired check, rate limit, scope check</td><td><code>src/lib/auth/api-context.ts</code></td></tr>
+            <tr><td>2. Validate</td><td>Body schema validation (recipient, content) and tenancy resolution (contact must belong to the key's <code>account_id</code>)</td><td><code>src/app/api/v1/messages/route.ts</code></td></tr>
+            <tr><td>3. Business logic</td><td>Loads conversation + contact + <code>whatsapp_config</code>, decrypts access token (self-heals legacy CBC → GCM on the way), resolves reply context, picks the correct send function</td><td><code>src/lib/whatsapp/send-message.ts → sendMessageToConversation()</code></td></tr>
+            <tr><td>4. External call</td><td><code>POST https://graph.facebook.com/v21.0/{phone_number_id}/messages</code>, retried across phone-number variants on "recipient not allowed" errors</td><td><code>src/lib/whatsapp/meta-api.ts</code></td></tr>
+            <tr><td>5. Database</td><td>Persists the <code>messages</code> row, updates conversation preview/timestamp, pauses any active Flow run for that contact (<code>flow_runs.status = 'paused_by_agent'</code>) so the bot doesn't talk over a human</td><td><code>send-message.ts</code> lines 443–513</td></tr>
+            <tr><td>6. Response</td><td><code>{ data: { id, status }, meta }</code> envelope</td><td><code>src/lib/api/v1/respond.ts</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Trace B — <code>POST /api/ai/draft</code> (agent clicks "Draft with AI")</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Step</th><th>What happens</th><th>Where</th></tr></thead>
+          <tbody>
+            <tr><td>1. Auth</td><td>Session auth via <code>requireRole('agent')</code>; then <b>two</b> rate limits checked in order — per-user <code>aiDraft</code> (20/min), then per-account <code>aiDraftAccount</code> (60/min) — before any DB/LLM work</td><td><code>src/app/api/ai/draft/route.ts</code></td></tr>
+            <tr><td>2. Validate</td><td><code>conversation_id</code> present, conversation resolvable under the caller's RLS session (404 otherwise)</td><td>same file</td></tr>
+            <tr><td>3. Load config</td><td><code>loadAiConfig()</code> decrypts the account's BYO OpenAI/Anthropic key; a decrypt failure returns a distinct <code>key_decrypt_failed</code> error from "not configured"</td><td><code>src/lib/ai/*</code></td></tr>
+            <tr><td>4. Retrieval (RAG)</td><td><code>retrieveKnowledge()</code> — best-effort hybrid search: skips entirely if the account has 0 knowledge chunks; otherwise semantic (pgvector) search if an embeddings key is set, topped up with Postgres full-text search; failures degrade silently, never block the draft</td><td><code>src/lib/ai/knowledge.ts</code></td></tr>
+            <tr><td>5. External call</td><td>Provider-specific adapter builds the prompt (merging consecutive same-role turns, required for Anthropic's strict alternation) and calls the provider's chat/messages endpoint with a timeout</td><td><code>src/lib/ai/providers/{openai,anthropic}.ts</code></td></tr>
+            <tr><td>6. Usage logging</td><td>Fire-and-forget insert into <code>ai_usage_log</code> via the service-role client — a logging failure never affects the response</td><td>route.ts line 117</td></tr>
+            <tr><td>7. Response</td><td><code>{ draft: text }</code> — explicitly read-only, nothing is sent or stored as a message</td><td>route.ts line 129</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ WORKFLOWS ============ -->
+    <section id="workflows">
+      <h2>5 · End-to-end workflows</h2>
+
+      <h3>5.1 Inbound WhatsApp message — the central pipeline</h3>
+      <p>This is the single most architecturally interesting file in the repo: <code>src/app/api/whatsapp/webhook/route.ts</code> (all of the logic below, including <code>handleStatusUpdate</code>, <code>processMessage</code>, <code>findOrCreateContact</code> and <code>findOrCreateConversation</code>, is defined inline in this one route file, not split into separate lib modules).</p>
+      <figure>
+        <div class="diagram-frame">
+<pre class="mermaid">
+sequenceDiagram
+  participant Meta as Meta Cloud API
+  participant WH as "POST /api/whatsapp/webhook"
+  participant Flows as Flows engine
+  participant Auto as Automations engine
+  participant AI as AI auto-reply
+  participant DB as Postgres
+
+  Meta-&gt;&gt;WH: POST + X-Hub-Signature-256 header
+  WH-&gt;&gt;WH: verifyMetaWebhookSignature(rawBody, META_APP_SECRET)
+  alt invalid signature
+    WH--&gt;&gt;Meta: 401 (loud failure, on purpose)
+  else valid
+    WH--&gt;&gt;Meta: 200 immediately
+    Note over WH: after() callback — NOT a floating promise\n(serverless freeze after response caused partial\nwrites in the past, issue #301)
+    WH-&gt;&gt;DB: findOrCreateContact — insert, catch unique\nviolation, re-resolve (race-safe, issue #363)
+    WH-&gt;&gt;DB: findOrCreateConversation — oldest row wins,\nnever .single() (issue #363)
+    WH-&gt;&gt;DB: insert messages row, bump preview/unread,\nreopen if closed (issue #409)
+    WH-&gt;&gt;Flows: dispatchInboundToFlows()
+    Flows--&gt;&gt;WH: consumed = true / false
+    alt Flow did NOT consume the message
+      WH-&gt;&gt;Auto: content triggers — new_message_received,\nkeyword_match, interactive_reply
+    end
+    WH-&gt;&gt;Auto: relationship triggers — new_contact_created,\nfirst_inbound_message (ALWAYS fire, even if consumed)
+    alt plain text, not consumed, no interactive reply
+      WH-&gt;&gt;AI: dispatchInboundToAiReply()
+      AI-&gt;&gt;DB: claim_ai_reply_slot() — atomic per-conversation cap
+      AI-&gt;&gt;Meta: send generated reply, if slot claimed
+    end
+    WH-&gt;&gt;DB: dispatch outbound webhooks — conversation.created,\nmessage.received (fired last, so a slow subscriber\ncan't delay the DB writes above)
+  end
+</pre>
+        </div>
+        <figcaption><b>Figure 5.</b> The full inbound pipeline, in dispatch order. <b>Flows win over Automations, and both win over the AI bot</b> — this ordering is deliberate so a customer navigating a Flow menu doesn't simultaneously get matched by a keyword automation or answered by the LLM. Relationship-level automation triggers are the one exception: they describe <i>who</i> is messaging, not <i>what</i> they said, so they fire regardless of whether a Flow consumed the content.</figcaption>
+      </figure>
+      <p>Media (image/video/audio/document/sticker) is never stored by direct URL — the webhook verifies the media ID resolves with Meta, then persists a proxy path (<code>/api/whatsapp/media/{id}</code>); the real Meta CDN URL and access token never leave the server (<code>src/app/api/whatsapp/media/[mediaId]/route.ts</code>).</p>
+
+      <h3>5.2 Automation "wait" step — suspend and resume via cron</h3>
+      <figure>
+        <div class="diagram-frame">
+<pre class="mermaid">
+sequenceDiagram
+  participant E as "engine.ts executeStepsFrom()"
+  participant DB as automation_pending_executions
+  participant Cron as "GET /api/automations/cron"
+  participant R as resumePendingExecution()
+
+  E-&gt;&gt;E: reach a step with step_type = wait
+  E-&gt;&gt;DB: insert row — status pending,\nrun_at = now + delay, next_step_position
+  E-&gt;&gt;DB: mark automation_logs.status = partial
+  Note over Cron: external pinger required —\nheader x-cron-secret, 503 until\nAUTOMATION_CRON_SECRET is configured
+  Cron-&gt;&gt;DB: select up to 50 rows where\nstatus=pending and run_at &lt;= now()
+  loop each due row
+    Cron-&gt;&gt;DB: UPDATE status='running' WHERE status='pending'\n(optimistic claim — skips if already grabbed)
+    Cron-&gt;&gt;R: resumePendingExecution(row)
+    R-&gt;&gt;E: executeStepsFrom(next_step_position)
+    R-&gt;&gt;DB: mark row done / failed
+  end
+</pre>
+        </div>
+        <figcaption><b>Figure 6.</b> There is no scheduler process — an operator must point an external pinger (cron, Vercel Cron, a systemd timer) at this endpoint. Docker Compose ships nothing that calls it; see <a href="#background">§7</a>.</figcaption>
+      </figure>
+
+      <h3>5.3 Broadcast campaign lifecycle</h3>
+      <figure>
+        <div class="diagram-frame">
+<pre class="mermaid">
+flowchart LR
+  A["Create broadcast\ndashboard or POST /api/v1/broadcasts"] --> B["createBroadcast()\nresolve + dedupe recipients"]
+  B --> C[("broadcasts: status=pending\nbroadcast_recipients: status=pending, one row per recipient")]
+  C --> D["deliverBroadcast()"]
+  D -->|"per recipient"| E["sendTemplateMessage()\nGraph API, phone-variant retry"]
+  E -->|"success"| F["recipient.status = sent"]
+  E -->|"failure"| G["recipient.status = failed"]
+  F --> H["Meta delivery-status webhooks arrive later"]
+  H --> I["handleStatusUpdate()\ndelivered / read / replied"]
+  I --> J[["broadcast_recipient_aggregate_trigger\nincremental counter update"]]
+  J --> C
+</pre>
+        </div>
+        <figcaption><b>Figure 7.</b> <code>deliverBroadcast()</code> deliberately never writes the aggregate <code>sent_count</code>/<code>delivered_count</code>/etc. columns on <code>broadcasts</code> directly — a Postgres trigger owns them exclusively, keeping the counters correct even though updates land from two different code paths (the send loop and the async status webhook).</figcaption>
+      </figure>
+
+      <h3>5.4 Flows — suspend/resume state machine</h3>
+      <figure>
+        <div class="diagram-frame">
+<pre class="mermaid">
+stateDiagram-v2
+  [*] --> active: startNewRun — one active run per contact, enforced by a partial unique index
+  active --> active: suspend at send_buttons / send_list / collect_input, resume on next reply
+  active --> completed: reaches an end node
+  active --> handed_off: reaches a handoff node
+  active --> paused_by_agent: a human agent sends a manual message mid-run
+  active --> timed_out: cron sweep past fallback_policy.on_timeout_hours (default 24h)
+  active --> failed: unknown or unimplemented node type reached (e.g. http_fetch)
+  completed --> [*]
+  handed_off --> [*]
+  paused_by_agent --> [*]
+  timed_out --> [*]
+  failed --> [*]
+</pre>
+        </div>
+        <figcaption><b>Figure 8.</b> Concurrency safety has three independent layers: idempotency keyed on <code>meta_message_id</code> (a Meta webhook retry can't double-advance a run), an optimistic <code>UPDATE ... WHERE current_node_key = expected</code> precondition on every advance (a lost race is logged, not silently overwritten), and the partial unique index <code>idx_one_active_run_per_contact</code> on <code>flow_runs(account_id, contact_id) WHERE status='active'</code> so two simultaneous "start" events can't create two active runs. Edges are not a separate table — each node's <code>config</code> JSONB embeds its own <code>next_node_key</code> pointers.</figcaption>
+      </figure>
+
+      <h3>5.5 Signup, invitation, and account onboarding</h3>
+      <p>New signups get a fresh personal <code>accounts</code> row and <code>owner</code> role atomically, via the <code>handle_new_user()</code> trigger on <code>auth.users</code>. Inviting a teammate stores only a SHA-256 hash of the invite token (<code>account_invitations.token_hash</code>); the plaintext is shown exactly once. Redemption (<code>redeem_invitation()</code> RPC, <code>019_invitation_rpcs.sql</code>) moves the invitee into the inviter's account and deletes their now-orphaned personal account — consistent with the locked design decision that a user belongs to exactly one account.</p>
+    </section>
+
+    <!-- ============ BACKGROUND ============ -->
+    <section id="background">
+      <h2>6 · Background processing</h2>
+      <p>There is no Celery/BullMQ/Sidekiq-equivalent anywhere in this codebase. Everything asynchronous is one of three shapes:</p>
+      <div class="grid3">
+        <div class="mm-card">
+          <h4><code>after()</code> inside a request</h4>
+          <p>The webhook returns <code>200</code> immediately, then does all real work inside Next's <code>after()</code> callback — awaited, not a detached promise, because a serverless function can freeze the instant the response is sent. <code>maxDuration = 60</code> on the route gives it headroom for per-media Meta verification calls.</p>
+        </div>
+        <div class="mm-card">
+          <h4>Externally-pinged cron</h4>
+          <p><code>GET /api/automations/cron</code> drains "wait"-step queue rows; <code>GET /api/flows/cron</code> sweeps stale Flow runs into <code>timed_out</code>. Both require a header <code>x-cron-secret</code> matching <code>AUTOMATION_CRON_SECRET</code>, compared with <code>timingSafeEqual</code>, and return <code>503</code> until that env var is set. Nothing in Docker Compose or the app itself calls these — an operator must wire an external pinger.</p>
+        </div>
+        <div class="mm-card">
+          <h4>Fire-and-forget, explicitly non-critical</h4>
+          <p>AI usage logging, legacy-token re-encryption on read, and <code>last_used_at</code> touches on API keys are all "best effort" — wrapped so their failure never affects the caller's response.</p>
+        </div>
+      </div>
+      <p>One correction worth flagging against a naive reading of "background processing": <code>GET /api/flows/cron</code> is <i>not</i> a wait-step resumer like its Automations counterpart — Flows have no <code>wait</code> node type at all. It is purely a timeout sweeper for stalled runs.</p>
+      <p>Outbound webhooks to third-party subscribers (<code>src/lib/webhooks/deliver.ts</code>) are explicitly <b>at-most-once, single attempt, 5s timeout</b> — the code comment states plainly that durable retry-with-backoff "would need a queue/worker (a follow-up)". After 15 consecutive failures an endpoint is auto-disabled via <code>record_webhook_failure()</code>.</p>
+    </section>
+
+    <!-- ============ INTEGRATIONS ============ -->
+    <section id="integrations">
+      <h2>7 · External integrations</h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Service</th><th>Called from</th><th>Purpose</th><th>Error handling</th></tr></thead>
+          <tbody>
+            <tr><td>Meta Graph API<br><code>graph.facebook.com/v21.0</code></td><td><code>src/lib/whatsapp/meta-api.ts</code>, <code>send-message.ts</code>, <code>broadcast-core.ts</code></td><td>Send text/media/template/interactive messages, register phone number, submit/edit/delete templates, resumable media upload for image headers, fetch media URLs</td><td>Retries across phone-number variants on "recipient not allowed"; template image-header upload is SSRF-guarded on the caller-supplied URL before Meta ever sees it</td></tr>
+            <tr><td>Meta webhook (inbound)</td><td><code>src/app/api/whatsapp/webhook/route.ts</code></td><td>Delivers inbound messages, status updates, template lifecycle events</td><td>HMAC-SHA256 verified against raw body; invalid signature → 401 (deliberately not 200, so Meta's dashboard surfaces misconfiguration)</td></tr>
+            <tr><td>OpenAI / Anthropic</td><td><code>src/lib/ai/providers/{openai,anthropic}.ts</code></td><td>Draft replies, autonomous auto-reply, embeddings for the knowledge base</td><td>Typed <code>AiError</code> (timeout/network/invalid_key/rate_limited/provider_error/empty_response); no global key — zero AI calls unless an account configures one</td></tr>
+            <tr><td>Subscriber webhooks (outbound)</td><td><code>src/lib/webhooks/deliver.ts</code></td><td>Notify third parties of <code>message.received</code>, <code>message.status_updated</code>, <code>conversation.created</code></td><td>HMAC-signed (<code>t=…,v1=…</code>), SSRF-guarded per delivery, single-attempt best-effort, auto-disable after 15 consecutive failures</td></tr>
+            <tr><td>Supabase (Postgres/Auth/Storage/Realtime)</td><td>throughout <code>src/lib/supabase</code>, <code>src/lib/*/admin-client.ts</code></td><td>System of record, session auth, media buckets, live inbox updates</td><td>RLS-respecting client for user-facing paths, service-role client for privileged engines (manual tenancy checks)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ STATES ============ -->
+    <section id="states">
+      <h2>8 · State transitions</h2>
+
+      <h3>8.1 Message / broadcast recipient delivery status</h3>
+      <figure>
+        <div class="diagram-frame">
+<pre class="mermaid">
+stateDiagram-v2
+  [*] --> pending
+  pending --> sent
+  sent --> delivered
+  delivered --> read
+  read --> replied
+  pending --> failed
+  sent --> failed
+  failed --> [*]
+  replied --> [*]
+  note right of failed : terminal — the ladder is forward-only,\nso a replayed or out-of-order Meta webhook\ncan never regress a message's displayed status
+</pre>
+        </div>
+        <figcaption><b>Figure 9.</b> Guarded by <code>isValidStatusTransition()</code> in the webhook route. Status is mirrored onto both <code>messages</code> (by <code>message_id</code>, unconditionally) and <code>broadcast_recipients</code> (by <code>whatsapp_message_id</code>, ladder-guarded) before the <code>message.status_updated</code> outbound webhook fires last.</figcaption>
+      </figure>
+
+      <h3>8.2 Other lifecycle states in the schema</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Entity</th><th>States</th><th>What drives the transition</th></tr></thead>
+          <tbody>
+            <tr><td><code>flow_runs.status</code></td><td>active → completed / handed_off / timed_out / paused_by_agent / failed</td><td>Node graph traversal, agent manual send, or the flows cron timeout sweep (see Figure 8)</td></tr>
+            <tr><td><code>automation_pending_executions.status</code></td><td>pending → running → done / failed</td><td>Cron claim (optimistic <code>UPDATE ... WHERE status='pending'</code>) then step resumption</td></tr>
+            <tr><td><code>message_templates.status</code></td><td>DRAFT → PENDING → APPROVED / REJECTED / PAUSED / DISABLED / IN_APPEAL / PENDING_DELETION</td><td>Meta's own template review lifecycle, mirrored 1:1 via the template webhook field (raw Meta enum since migration 014)</td></tr>
+            <tr><td><code>conversations.status</code></td><td>open ↔ pending ↔ closed</td><td>Agent action, or auto-reopened when a customer messages into a closed conversation (issue #409)</td></tr>
+            <tr><td><code>account_invitations</code></td><td>pending → accepted (or expires)</td><td><code>redeem_invitation()</code> RPC; hashed token compared server-side</td></tr>
+            <tr><td><code>webhook_endpoints.failure_count</code></td><td>0 → increments → auto <code>is_active=false</code> at 15</td><td><code>record_webhook_failure()</code>, reset to 0 on any successful delivery</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ RISKS ============ -->
+    <section id="risks">
+      <h2>9 · Architecture risks</h2>
+      <p class="lede">Ranked by what's most likely to bite an operator or a contributor extending this code. "Confirmed" items were reproduced by reading the actual implementation, not inferred.</p>
+
+      <div class="risk-list">
+        <div class="risk">
+          <div class="risklabel"><span class="chip warn">Scale risk</span></div>
+          <div>
+            <h4>Rate limiter is in-memory and per-process</h4>
+            <p><code>src/lib/rate-limit.ts</code> holds every bucket (send, broadcast, public API, AI draft/auto-reply, invitations, admin actions) in a single process-local <code>Map</code>. The code comments this explicitly: a horizontally-scaled deploy (2+ instances) silently loses the shared limit — every cap in <code>RATE_LIMITS</code> becomes N× looser with no error, no warning.</p>
+            <p class="fix">Confirmed at <code>src/lib/rate-limit.ts:9-14</code>. Mitigation already pointed at in the code: swap the same interface for a Redis/Upstash-backed store before scaling past one instance.</p>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risklabel"><span class="chip warn">Coupling risk</span></div>
+          <div>
+            <h4>Service-role tenancy checks are duplicated across four call sites</h4>
+            <p>Four independent <code>supabaseAdmin()</code> factories (flows, automations, ai, and an inline copy in the webhook route) each bypass RLS. "Does this specific call re-verify the row belongs to the claimed account" has to be individually true in every one of them — there's no single choke point that would catch a new service-role code path forgetting the check.</p>
+            <p class="fix">Confirmed via repo-wide grep for <code>SUPABASE_SERVICE_ROLE_KEY</code>. Today's call sites do the check correctly (e.g. <code>runAutomationsForTrigger</code> re-verifies <code>contactId</code> belongs to <code>accountId</code>) — the risk is in the next one that's added without following the pattern.</p>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risklabel"><span class="chip warn">Dead feature</span></div>
+          <div>
+            <h4>Two automation trigger types exist end-to-end except the dispatch call</h4>
+            <p><code>time_based</code> ("schedule") and <code>conversation_assigned</code> are both valid in the type system, the validator, and the trigger-selection UI — but no code path anywhere calls <code>runAutomationsForTrigger</code> with either of them automatically. A user can build and activate an automation on these triggers and it will simply never fire.</p>
+            <p class="fix">Confirmed by grepping every caller of <code>runAutomationsForTrigger</code>. Only reachable today via the manual/testing <code>POST /api/automations/engine</code> endpoint with an arbitrary trigger_type in the body.</p>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risklabel"><span class="chip warn">Correctness</span></div>
+          <div>
+            <h4>A Flow node type is allowed by the schema but not implemented</h4>
+            <p><code>flow_nodes.node_type</code>'s CHECK constraint (and a code comment referencing a "v2") both admit <code>http_fetch</code>, but it's absent from <code>FlowNodeType</code>/<code>FlowNodeConfig</code> and from the engine's node-execution switch. A flow node of that type (however it got created) falls through to the "unknown node type" branch and fails the run.</p>
+            <p class="fix">Confirmed in <code>src/lib/flows/types.ts</code> and <code>engine.ts</code>'s <code>advanceFromNodeKey</code>. Low likelihood in practice (the UI likely never emits this type), but a public-API or direct-DB path could trigger it silently.</p>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risklabel"><span class="chip info">Accepted / documented</span></div>
+          <div>
+            <h4>Outbound webhook SSRF guard has a documented DNS-rebinding gap</h4>
+            <p><code>src/lib/webhooks/ssrf.ts</code> resolves and validates a hostname's IPs at check-time, then <code>fetch()</code>s separately — a host that resolves to a public IP at check time and a private one at connect time isn't caught. The code comments call this out as a known, accepted residual risk rather than an oversight.</p>
+            <p class="fix">Not a regression to fix reflexively — but worth knowing before treating the SSRF guard as airtight.</p>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risklabel"><span class="chip info">Staged rollout</span></div>
+          <div>
+            <h4>CSP is report-only, not enforced</h4>
+            <p><code>next.config.ts</code> ships <code>Content-Security-Policy-Report-Only</code> rather than an enforced <code>Content-Security-Policy</code> — deliberately staged pending a clean bill of health across routes. Don't assume it's blocking anything in production yet.</p>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risklabel"><span class="chip good">Fixed, historical</span></div>
+          <div>
+            <h4>Two real tenant-isolation vulnerabilities were already found and patched</h4>
+            <p>Migration <code>032</code> closed a cross-account read on the AI knowledge-base search RPCs (they were <code>SECURITY DEFINER</code> when they should have been <code>INVOKER</code>); migration <code>034</code> closed a client-writable <code>profiles.account_id</code>/<code>account_role</code> that could be used to hop accounts or self-promote to owner. Both are tagged <code>GHSA-fg5p-2qc3-jmxr</code>.</p>
+            <p class="fix">Not a current risk — listed because the pattern (a new <code>SECURITY DEFINER</code> function, or a new client-writable privileged column) is exactly how both happened, and is worth extra scrutiny on any future migration.</p>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risklabel"><span class="chip info">Minor</span></div>
+          <div>
+            <h4>Public API scope design has one wart</h4>
+            <p><code>GET /api/v1/broadcasts/[id]</code> (status polling, read-only) requires the <code>broadcasts:send</code> scope — there's no separate read-only broadcasts scope, so a key intended only to check delivery status must also carry send capability.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ START HERE ============ -->
+    <section id="start-here">
+      <h2>10 · Where to start reading</h2>
+      <p class="lede">In priority order — each of these, read end-to-end, will teach you the mechanism behind most of the rest of the codebase.</p>
+      <ol class="workflow-list">
+        <li>
+          <b>The inbound WhatsApp pipeline</b> — the busiest, most-touched file in the repo; everything else exists to feed or be fed by it.
+          <div class="wpaths"><code>src/app/api/whatsapp/webhook/route.ts</code></div>
+        </li>
+        <li>
+          <b>Session auth and cookie refresh</b> — small file, subtle bug class (issue #288) if you ever touch it.
+          <div class="wpaths"><code>src/middleware.ts</code> <code>src/middleware.test.ts</code></div>
+        </li>
+        <li>
+          <b>The tenancy primitive</b> — one SQL function and its TypeScript mirror explain almost every RLS policy and role check in the app.
+          <div class="wpaths"><code>supabase/migrations/017_account_sharing.sql</code> <code>src/lib/auth/roles.ts</code></div>
+        </li>
+        <li>
+          <b>Automations engine + its cron</b> — trigger → step tree → wait → resume, the simpler of the two automation systems.
+          <div class="wpaths"><code>src/lib/automations/engine.ts</code> <code>src/app/api/automations/cron/route.ts</code></div>
+        </li>
+        <li>
+          <b>Flows engine</b> — the richer bot builder, and the best worked example of race-safe state mutation in the codebase.
+          <div class="wpaths"><code>src/lib/flows/engine.ts</code></div>
+        </li>
+        <li>
+          <b>Outbound send stack + status ladder</b> — how a message actually leaves the system, and why status can only move forward.
+          <div class="wpaths"><code>src/lib/whatsapp/send-message.ts</code> <code>src/lib/whatsapp/meta-api.ts</code></div>
+        </li>
+        <li>
+          <b>AI auto-reply gating and handoff</b> — the cleanest example in the repo of bounding an autonomous system's blast radius.
+          <div class="wpaths"><code>src/lib/ai/auto-reply.ts</code> <code>src/lib/ai/handoff.ts</code></div>
+        </li>
+        <li>
+          <b>Public API key auth</b> — the second, independent auth system, and what the MCP server actually wraps.
+          <div class="wpaths"><code>src/lib/auth/api-context.ts</code> <code>src/lib/api-keys/</code></div>
+        </li>
+        <li>
+          <b>Encryption and webhook trust</b> — how tokens are protected at rest and how both inbound and outbound webhooks prove authenticity.
+          <div class="wpaths"><code>src/lib/whatsapp/encryption.ts</code> <code>src/lib/webhooks/sign.ts</code> <code>src/lib/webhooks/ssrf.ts</code></div>
+        </li>
+        <li>
+          <b>Full schema, in order</b> — reading all 36 migrations top to bottom is the fastest way to understand why the data model looks the way it does, including its two security fixes.
+          <div class="wpaths"><code>supabase/migrations/*.sql</code></div>
+        </li>
+      </ol>
+    </section>
+  </main>
+</div>
+
+<a class="backtop" href="#mental-model">↑ Back to top</a>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  const isDark = () => {
+    const t = document.documentElement.getAttribute('data-theme');
+    if (t === 'dark') return true;
+    if (t === 'light') return false;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  };
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: isDark() ? 'dark' : 'default',
+    fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+  });
+</script>
+</body>
+</html>
